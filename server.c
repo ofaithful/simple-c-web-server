@@ -3,129 +3,182 @@
 #include <string.h>
 #include <winsock2.h>
 #include <unistd.h>
+#include <time.h>
+#include <uv.h>
 
 #pragma comment(lib, "ws2_32.lib")
 
-#include "lib/response.h"
+// #include "lib/response.h"
 
 #define PORT 8080
 #define BUFFER_SIZE 1024
 #define HOST "127.0.0.1"
 
-void handleHtml(int clientSocket) {
-    FILE* file = fopen("index.html", "r");
-    if (file == NULL) {
-        perror("failed to open a file");
-        exit(EXIT_FAILURE);
+static uv_loop_t * loop;
+static uv_tcp_t server;
+struct client_request_data {
+    time_t start;
+    char *text;
+    size_t text_len;
+    char *response;
+    int work_started;
+
+    uv_tcp_t *client;
+    uv_work_t *work_req;
+    uv_work_t *write_req;
+    uv_timer_t *timer;
+};
+
+// allocate buffers as requested bu UV
+static void alloc_buffer(uv_handle_t *handle, size_t size, uv_buf_t *buf) {
+    char *base;
+    base = (char *) calloc(1, size);
+    if (!base) {
+        *buf = uv_buf_init(NULL, 0);
+    } else {
+        *buf = uv_buf_init(base, size);
     }
-
-    fseek(file, 0, SEEK_END);
-    int size = ftell(file);
-    printf("size of the index.html is: %d\n", size);
-    fseek(file, 0, SEEK_SET);
-
-    char response[size];
-
-
-    size_t bytesRead;
-    size_t totalBytesRead = 0;
-    while ((bytesRead = fread(response, 1, size, file)) > 0) {
-        totalBytesRead += bytesRead;
-    }
-
-    fclose(file);
-
-    char headers[BUFFER_SIZE];
-
-    sprintf(
-        headers,
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Length: %lu\r\n"
-        "Content-Type: text/html\r\n"
-        "\r\n",
-        totalBytesRead
-    );
-
-    printf("headers: %s", headers);
-
-    if (send(clientSocket, headers, strlen(headers), 0) == -1) {
-        perror("failed to send headers");
-        exit(EXIT_FAILURE);
-    }
-
-    if (send(clientSocket, response, totalBytesRead, 0) == -1) {
-        perror("failed to send response");
-        exit(EXIT_FAILURE);
-    }
-
-    closesocket(clientSocket);
 }
 
-int main() {
-    WSADATA wsaData;
-    SOCKET serverSocket, clientSocket;
-    struct sockaddr_in serverAddress, clientAddress;
-    int clientAddressLength = sizeof(clientAddress);
+// callback to free the handle
+static void on_close_free(uv_handle_t *handle) {
+    free(handle);
+}
+
+// callback fo freeing up all resources allocated for request
+static void close_data(struct client_request_data *data) {
+    if (!data) return;
+    if (data->client) uv_close((uv_handle_t *)data->client, on_close_free);
+    if (data->work_req) free(data->work_req);
+    if (data->write_req) free(data->write_req);
+    if (data->timer) uv_close((uv_handle_t *)data->timer, on_close_free);
+    if (data->text) free(data->text);
+    if (data->response) free(data->response);
+    free(data);
+}
+
+// callback for when the TCP write is complete
+static void on_write_end(uv_write_t *req, int status) {
+    struct client_request_data *data;
+    data = req->data;
+    close_data(data);
+}
+
+// callback for post completion of the work associated with the request
+static void after_process_command(uv_work_t *req, int status) {
+    struct client_request_data *data;
+    data = req->data;
+    uv_buf_t buf = uv_buf_init(data->response, strlen(data->response) + 1);
+    data->write_req = malloc(sizeof(*data->write_req));
+    data->write_req->data = data;
+    uv_timer_stop(data->timer);
+    uv_write(data->write_req, (uv_stream_t *)data->client, &buf, 1, on_write_end);
+}
+
+// callback for doint the actual work
+static void process_command(uv_work_t *req) {
+    struct client_request_data *data;
+    char *x;
     
-    char buffer[BUFFER_SIZE] = {0};
+    data = req->data;
+    // do the actual request processing here
+    data->response = strdup("Hello World, work's done\n");
+}
 
-    // initialize winsock
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        perror("WSAStartup failed");
-        return 1;
-    }
+// callback for read function, called multiple times per request
+static void read_cb(uv_stream_t * stream, ssize_t nread, const uv_buf_t *buf) {
+    uv_tcp_t *client;
+    struct client_request_data *data;
+    char *tmp;
 
-    // create a socket
-    if ((serverSocket = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
-        perror("socket failed");
-        return 1;
-    }
+    client = (uv_tcp_t *)stream;
+    data = stream->data;
 
-    // bind the socket to a specific IP address and port
-    serverAddress.sin_family = AF_INET;
-    serverAddress.sin_addr.s_addr = inet_addr(HOST);
-    serverAddress.sin_port = htons(PORT);
-
-    if (bind(serverSocket, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) == SOCKET_ERROR) {
-        perror("bind failed");
-        return 1;
-    }
-
-    // listen for incoming connections
-    if (listen(serverSocket, SOMAXCONN) == SOCKET_ERROR) {
-        perror("listen failed");
-        return 1;
-    }
-    printf("Web server started on %s:%d\n", HOST, PORT);
-
-    // accept incoming connections and handle them
-    while (1) {
-        if ((clientSocket = accept(serverSocket, (struct sockaddr *)&clientAddress, &clientAddressLength)) < 0) {
-            perror("accept failed");
-            continue;
-        }
-
-        memset(buffer, 0, sizeof(buffer));
-        recv(clientSocket, buffer, BUFFER_SIZE - 1, 0);
-
-        char method[BUFFER_SIZE], uri[BUFFER_SIZE], version[BUFFER_SIZE];
-        sscanf(buffer, "%s %s %s", method, uri, version);
-
-        printf("[%s:%u] %s %s %s\n", inet_ntoa(clientAddress.sin_addr), ntohs(clientAddress.sin_port), method, version, uri);
-        printf("Received request: \n%s\n", buffer);
-
-        if (*uri == '/') {
-            handleHtml(clientSocket);
+    if (nread == -1 || nread == UV_EOF) {
+        free(buf->base);
+        uv_timer_stop(data->timer);
+        close_data(data);
+    } else {
+        if (!data->text) {
+            data->text = malloc(nread+1);
+            memcpy(data->text, buf->base, nread);
+            data->text[nread] = '\0';
+            data->text_len = nread;
         } else {
-            char *response = getResponse(method);
-            send(clientSocket, response, strlen(response), 0);
-            printf("Response sent:\n%s\n", response);
-            closesocket(clientSocket);
+            tmp = realloc(data->text, data->text_len + nread + 1);
+            memcpy(tmp + data->text_len, buf->base, nread);
+            tmp[data->text_len + nread] = '\0';
+            data->text = tmp;
+            data->text_len += nread;
+        }
+        free(buf->base);
+        if (!data->work_started && data->text_len && (strstr(data->text, "\r\n") || strstr(data->text, "\n\n"))) {
+            data->work_req = malloc(sizeof(*data->work_req));
+            data->work_req->data = data;
+            data->work_started = 1;
+            uv_read_stop(stream);
+            uv_queue_work(loop, data->work_req, process_command, after_process_command);
         }
     }
+}
 
-    closesocket(serverSocket);
-    WSACleanup();
+// callback for the timer which signifies a timeout
+static void client_timeout_cb(uv_timer_t *handle) {
+    struct client_request_data *data;
+    data = (struct client_request_data *)handle->data;
+    uv_timer_stop(handle);
+    if (data->work_started)
+        return;
+    close_data(data);
 
-    return 0;
+}
+
+// callback for handling new connection
+static void connection_cb(uv_stream_t * server, int status) {
+    struct client_request_data *data;
+
+    if (status == -1) {
+        return;
+    }
+
+    data = calloc(1, sizeof(*data));
+    data->start = time(NULL);
+    uv_tcp_t *client = malloc(sizeof(uv_tcp_t));
+    client->data = data;
+    data->client = client;
+
+    // initialize new client
+    uv_tcp_init(loop, client);
+
+    if (uv_accept(server, (uv_stream_t *)client) == 0) {
+        // start reading from stream
+        uv_timer_t *timer;
+        timer = malloc(sizeof(*timer));
+        timer->data = data;
+        data->timer = timer;
+        uv_timer_init(loop, timer);
+        uv_timer_set_repeat(timer, 1);
+        uv_timer_start(timer, client_timeout_cb, 10000, 20000);
+        uv_read_start((uv_stream_t *)client, alloc_buffer, read_cb);
+    } else {
+        // close client stream on error
+        close_data(data);
+    }
+}
+
+int main(int argc, char **argv) {
+    loop = uv_default_loop();
+
+    struct sockaddr_in addr;
+
+    uv_ip4_addr("0.0.0.0", 8080, &addr);
+    uv_tcp_init(loop, &server);
+    uv_tcp_bind(&server, (struct sockaddr *)&addr, 0);
+
+    int r = uv_listen((uv_stream_t *)&server, 128, connection_cb);
+    if (r) {
+        return fprintf(stderr, "Error on listening: %s.\n", uv_strerror(r));
+    }
+
+    return uv_run(loop, UV_RUN_DEFAULT);
 }
