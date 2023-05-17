@@ -4,6 +4,7 @@
 #include <winsock2.h>
 #include <unistd.h>
 #include <time.h>
+#include <ctype.h>
 #include <uv.h>
 
 #pragma comment(lib, "ws2_32.lib")
@@ -13,6 +14,8 @@
 #define PORT 8080
 #define BUFFER_SIZE 1024
 #define HOST "127.0.0.1"
+#define MAX_HEADER_NAME_LENGTH 128
+#define MAX_HEADER_VALUE_LENGTH 256
 
 static uv_loop_t * loop;
 static uv_tcp_t server;
@@ -29,6 +32,78 @@ struct client_request_data {
     uv_timer_t *timer;
 };
 
+typedef struct {
+    char name[MAX_HEADER_NAME_LENGTH];
+    char value[MAX_HEADER_VALUE_LENGTH];
+} HttpHeader;
+
+typedef struct {
+    HttpHeader headers[50];
+    int count;
+} HttpHeaders;
+
+typedef struct {
+    char method[16];
+    char path[256];
+    char version[16];
+} HttpRequest;
+
+void add_header(HttpHeaders* headers, const char *name, const char* value) {
+    HttpHeader *header = &(headers->headers[headers->count]);
+    strncpy(header->name, name, MAX_HEADER_NAME_LENGTH);
+    strncpy(header->value, value, MAX_HEADER_VALUE_LENGTH);
+    headers->count++;
+}
+
+void print_headers(HttpHeaders* headers) {
+    for (int i = 0; i < headers->count; i++) {
+        HttpHeader* header = &(headers->headers[i]);
+        printf("%s: %s\n", header->name, header->value);
+    }
+}
+
+void parseHttp(char* rawHttp) {
+
+    HttpHeaders headers;
+    HttpRequest request;
+    headers.count = 0;
+    char *body[1024];
+
+    char *copy = malloc(strlen(rawHttp));
+    if (copy == NULL) exit(EXIT_FAILURE);
+    strcpy(copy, rawHttp);
+
+    char *lines[strlen(rawHttp)];
+    int line_count = 0;
+    char *line = strtok(copy, "\n");
+
+    sscanf(line, "%s %s %s", request.method, request.path, request.version);
+    
+    line = strtok(NULL, "\n");
+
+    int bodyEncountered = 0;
+    while (line != NULL) {
+        if (strlen(line) == 1 && isspace(line[0])) {
+            bodyEncountered = 1;
+        } else {
+            lines[line_count] = line;
+
+            if (!bodyEncountered) {
+                char *header[MAX_HEADER_NAME_LENGTH], *value[MAX_HEADER_VALUE_LENGTH];
+                sscanf(line, "%[^:]:%s", header, value);
+                add_header(&headers, header, value);
+            } else {
+                strcpy(body, line);
+            }
+        }
+        
+        line_count++;
+        line = strtok(NULL, "\n");
+    }
+    print_headers(&headers);
+
+    free(copy);
+}
 // allocate buffers as requested bu UV
 static void alloc_buffer(uv_handle_t *handle, size_t size, uv_buf_t *buf) {
     char *base;
@@ -68,7 +143,7 @@ static void on_write_end(uv_write_t *req, int status) {
 static void after_process_command(uv_work_t *req, int status) {
     struct client_request_data *data;
     data = req->data;
-    uv_buf_t buf = uv_buf_init(data->response, strlen(data->response) + 1);
+    uv_buf_t buf = uv_buf_init(data->response, strlen(data->response));
     data->write_req = malloc(sizeof(*data->write_req));
     data->write_req->data = data;
     uv_timer_stop(data->timer);
@@ -79,10 +154,22 @@ static void after_process_command(uv_work_t *req, int status) {
 static void process_command(uv_work_t *req) {
     struct client_request_data *data;
     char *x;
-    
+
     data = req->data;
+    printf("\033[0;32m");
+    printf("Received reqeust:\n");
+    printf("\033[0m");
+    printf("%s\n", data->text);
+
+    parseHttp(data->text);
+    
     // do the actual request processing here
-    data->response = strdup("Hello World, work's done\n");
+    data->response = strdup("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n\{ \"method\": \"GET\" }\r\n");
+
+    printf("\033[0;32m");
+    printf("Response data:\n");
+    printf("\033[0m");
+    printf("%s\n", data->response);
 }
 
 // callback for read function, called multiple times per request
@@ -166,12 +253,12 @@ static void connection_cb(uv_stream_t * server, int status) {
     }
 }
 
-int main(int argc, char **argv) {
+int main() {
     loop = uv_default_loop();
 
     struct sockaddr_in addr;
 
-    uv_ip4_addr("0.0.0.0", 8080, &addr);
+    uv_ip4_addr("0.0.0.0", PORT, &addr);
     uv_tcp_init(loop, &server);
     uv_tcp_bind(&server, (struct sockaddr *)&addr, 0);
 
@@ -179,6 +266,6 @@ int main(int argc, char **argv) {
     if (r) {
         return fprintf(stderr, "Error on listening: %s.\n", uv_strerror(r));
     }
-
+    printf("Web server is running on 0.0.0.0:%d\n", PORT);
     return uv_run(loop, UV_RUN_DEFAULT);
 }
