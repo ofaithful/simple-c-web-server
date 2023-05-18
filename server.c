@@ -35,45 +35,45 @@ struct client_request_data {
 typedef struct {
     char name[MAX_HEADER_NAME_LENGTH];
     char value[MAX_HEADER_VALUE_LENGTH];
-} HttpHeader;
+} http_header;
 
 typedef struct {
-    HttpHeader headers[50];
+    http_header keyValues[50];
     int count;
-} HttpHeaders;
+} http_headers;
 
 typedef struct {
     char method[16];
     char path[256];
     char version[16];
-} HttpRequest;
 
-void add_header(HttpHeaders* headers, const char *name, const char* value) {
-    HttpHeader *header = &(headers->headers[headers->count]);
+    http_headers headers;
+} http_request;
+
+
+void add_header(http_request *request, const char *name, const char *value) {
+    http_header *header = &(request->headers.keyValues[request->headers.count]);
     strncpy(header->name, name, MAX_HEADER_NAME_LENGTH);
     strncpy(header->value, value, MAX_HEADER_VALUE_LENGTH);
-    headers->count++;
+    request->headers.count++;
 }
 
-void print_headers(HttpHeaders* headers) {
-    for (int i = 0; i < headers->count; i++) {
-        HttpHeader* header = &(headers->headers[i]);
+void print_headers(http_request* request) {
+    for (int i = 0; i < request->headers.count; i++) {
+        http_header* header = &(request->headers.keyValues[i]);
         printf("%s: %s\n", header->name, header->value);
     }
 }
 
-void parseHttp(char* rawHttp) {
+http_request parseHttp(char* rawHttp) {
 
-    HttpHeaders headers;
-    HttpRequest request;
-    headers.count = 0;
+    http_request request;
+    request.headers.count = 0;
     char *body[1024];
 
-    char *copy = malloc(strlen(rawHttp));
+    char *copy = strdup(rawHttp);
     if (copy == NULL) exit(EXIT_FAILURE);
-    strcpy(copy, rawHttp);
 
-    char *lines[strlen(rawHttp)];
     int line_count = 0;
     char *line = strtok(copy, "\n");
 
@@ -86,12 +86,10 @@ void parseHttp(char* rawHttp) {
         if (strlen(line) == 1 && isspace(line[0])) {
             bodyEncountered = 1;
         } else {
-            lines[line_count] = line;
-
             if (!bodyEncountered) {
                 char *header[MAX_HEADER_NAME_LENGTH], *value[MAX_HEADER_VALUE_LENGTH];
                 sscanf(line, "%[^:]:%s", header, value);
-                add_header(&headers, header, value);
+                add_header(&request, header, value);
             } else {
                 strcpy(body, line);
             }
@@ -100,9 +98,12 @@ void parseHttp(char* rawHttp) {
         line_count++;
         line = strtok(NULL, "\n");
     }
-    print_headers(&headers);
 
     free(copy);
+    
+    printf("Request body: %s\n", body);
+
+    return request;
 }
 // allocate buffers as requested bu UV
 static void alloc_buffer(uv_handle_t *handle, size_t size, uv_buf_t *buf) {
@@ -161,7 +162,9 @@ static void process_command(uv_work_t *req) {
     printf("\033[0m");
     printf("%s\n", data->text);
 
-    parseHttp(data->text);
+    http_request request = parseHttp(data->text);
+
+    print_headers(&request);
     
     // do the actual request processing here
     data->response = strdup("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n\{ \"method\": \"GET\" }\r\n");
