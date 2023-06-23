@@ -16,7 +16,6 @@ typedef enum {
     TOKEN_BOOLEAN,
     TOKEN_JSON_TRUE,
     TOKEN_JSON_FALSE,
-    TOKEN_UNDEFINED,
     TOKEN_ILLEGAL,
     TOKEN_EOF,
 } TokenType;
@@ -26,6 +25,11 @@ typedef struct SToken {
     char* literal;
 } Token;
 
+typedef struct {
+    Token** tokens;
+    size_t length;
+} TokensArray;
+
 typedef struct SLexer Lexer;
 Lexer* lexerCreate(const char* input);
 
@@ -33,6 +37,8 @@ Token* lexerNext(Lexer* lexer);
 void lexerCleanup(Lexer** lexer);
 
 Token* tokenCreate(TokenType type, char* literal);
+TokensArray parseTokens(const char* json);
+void parsedTokensCleanup(TokensArray tokens);
 void tokenCleanup(Token** token);
 
 #endif // _LEXER_H_

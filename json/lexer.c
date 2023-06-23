@@ -1,10 +1,9 @@
-#include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 
-#include "json.h"
+#include "lexer.h"
 
 struct SLexer {
     const char* input;
@@ -37,6 +36,8 @@ Lexer* lexerCreate(const char* input) {
     lexer->position = 0;
     lexer->readPosition = 0;
     lexer->ch = input[0];
+
+    _lexerReadChar(lexer);
 
     return lexer;
 }
@@ -123,6 +124,35 @@ Token *tokenCreate(TokenType type, char* literal) {
     token->type = type;
 
     return token;
+}
+
+TokensArray parseTokens(const char* json) {
+    Token** tokensArray = malloc(sizeof(Token));
+    size_t size = sizeof(Token);
+
+    Lexer* lexer = lexerCreate(json);
+
+    int i = 0;
+    while ((tokensArray[i] = lexerNext(lexer)) && tokensArray[i]->type != TOKEN_EOF) {
+        size_t newLength = size + sizeof(Token);
+        tokensArray = realloc(tokensArray, size);
+        size = newLength;
+        i++;
+    }
+
+    int tokensLength = size / sizeof(Token);
+    
+    TokensArray returnValue = {tokensArray, tokensLength};
+
+    return returnValue;
+}
+
+void parsedTokensCleanup(TokensArray tokens) {
+    for (int i = 0; i < tokens.length; i++) {
+        if (tokens.tokens[i]) {
+            tokenCleanup(&tokens.tokens[i]);
+        }
+    }
 }
 
 void tokenCleanup(Token** token) {
@@ -225,33 +255,6 @@ static uint8_t _isLetter(char ch) {
     return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z' || ch == '_';
 }
 
-// typedef struct {
-//     char* key;
-//     struct JSON_value* value;
-// } JSON_object;
-
-// typedef struct {
-//     struct JSON_value** elements;
-//     int count;
-// } JSON_array;
-
-// typedef struct JSON_value {
-//     enum {
-//         JSON_STRING,
-//         JSON_NUMBER,
-//         JSON_BOOL,
-//         JSON_NULL,
-//         JSON_OBJECT,
-//         JSON_ARRAY
-//     } type;
-//     union {
-//         char* string;
-//         double number;
-//         int boolean;
-//         JSON_object object;
-//         JSON_array array;
-//     } data;
-// } JSON_value;
 
 
 // void process_json_object(const char* object) {
@@ -259,22 +262,22 @@ static uint8_t _isLetter(char ch) {
 // }
 
 
-int main() {
-    const char *testString = "{\"protocol\":\"HTTP\",\"version\":1.1,\"methods\":[\"GET\",\"PUT\",\"POST\",\"PATCH\",\"DELETE\"],\"headers\":{\"content-type\":\"application/json\",\"content-length\":125,\"host\":\"localhost:8080\"},\"nullValue\": null,\"trueValue\":true,\"falseValue\":false}";
-    int length = strlen(testString);
+// int main() {
+//     const char *testString = "{\"protocol\":\"HTTP\",\"version\":1.1,\"methods\":[\"GET\",\"PUT\",\"POST\",\"PATCH\",\"DELETE\"],\"headers\":{\"content-type\":\"application/json\",\"content-length\":125,\"host\":\"localhost:8080\"},\"nullValue\": null,\"trueValue\":true,\"falseValue\":false}";
+//     int length = strlen(testString);
 
-    Lexer* lexer = lexerCreate(testString);
-    Token* token = NULL;
+//     Lexer* lexer = lexerCreate(testString);
+//     Token* token = NULL;
 
-    int i = 0;
-    while ((token = lexerNext(lexer)) && token->type != TOKEN_EOF) {
-        printf("Token[%d].type: %d.\nToken[%d].literal: %s\n\n", i, token->type, i, token->literal);
-        // printf("position: %d\n", lexer->position);
-        tokenCleanup(&token);
-        i++;
-    }
-    // printf("from 207 position: %s\n", &testString[202]);
+//     int i = 0;
+//     while ((token = lexerNext(lexer)) && token->type != TOKEN_EOF) {
+//         printf("Token[%d].type: %d.\nToken[%d].literal: %s\n\n", i, token->type, i, token->literal);
+//         // printf("position: %d\n", lexer->position);
+//         tokenCleanup(&token);
+//         i++;
+//     }
+//     // printf("from 207 position: %s\n", &testString[202]);
 
-    lexerCleanup(&lexer);
-    return 0;
-}
+//     lexerCleanup(&lexer);
+//     return 0;
+// }
