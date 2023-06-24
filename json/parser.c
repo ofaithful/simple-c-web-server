@@ -8,24 +8,144 @@
 JSON_object* parseObject(TokensArray* tokens, int start);
 JSON_array* parseArray(TokensArray* tokens, int start);
 
-Parser* parserCreate(Lexer* lexer) {
-    size_t len = sizeof(Parser);
-    Parser* parser = malloc(len);
-    if (parser == NULL) {
+void jsonObjectCleanup(JSON_object* object);
+void jsonArrayCleanup(JSON_array* array);
+
+static SeparatorsData _getSeparatorsData(TokensArray* tArray, int startPosition, int endPosition);
+static void _separatorsDataCleanup(SeparatorsData* data);
+
+static int _findEnclosingTokenPosition(TokensArray* tokens, int startPosition);
+static JSON_value _parseValue(Token* token);
+
+
+JSON_array* parseArray(TokensArray* tokens, int start) {
+    if (tokens->tokens[start]->type != TOKEN_LEFT_BRACKET) {
+        printf("Invalid char at position: %d\n", start);
         return NULL;
     }
-    memset(parser, 0, len);
 
-    parser->current = NULL;
-    parser->peek = NULL;
+    int endPosition = _findEnclosingTokenPosition(tokens, start);
+    if (endPosition < 0) {
+        return NULL;
+    }
 
-    return parser;
-} 
+    SeparatorsData sData = _getSeparatorsData(tokens, start, endPosition);
 
+    JSON_array* array = (JSON_array*) malloc(sizeof(JSON_array));
+    array->length = sData.length;
+    array->elements = (JSON_value*) malloc(sData.length * sizeof(JSON_value)); 
 
-void parserCleanup(Parser* parser);
+    for (int i = start, j = 0; j < sData.length; i = sData.positions[j++]) {
+        if (tokens->tokens[i + 1]->type == TOKEN_LEFT_BRACKET) {
+            JSON_value value;
+            value.type = JSON_ARRAY;
+            value.data.array = parseArray(tokens, i + 1);
+            array->elements[j] = value;
+        } else if (tokens->tokens[i + 2]->type == TOKEN_LEFT_BRACE) {
+            JSON_value value;
+            value.type = JSON_OBJECT;
+            value.data.object = parseObject(tokens, i + 1);
+            array->elements[j] = value;
+        } else {
+            array->elements[j] = _parseValue(tokens->tokens[i + 1]);
+        }
+    }
 
-SeparatorsData getSeparatorsData(TokensArray* tArray, int startPosition, int endPosition) {
+    _separatorsDataCleanup(&sData);
+    return array;
+}
+
+void jsonArrayCleanup(JSON_array* array) {
+    for (int i = 0; i < array->length; i++) {
+        switch (array->elements[i].type) {
+            case JSON_STRING:
+                free(array->elements[i].data.string);
+            break;
+            case JSON_ARRAY:
+                jsonArrayCleanup(array->elements[i].data.array);
+            break;
+            case JSON_OBJECT:
+                jsonObjectCleanup(array->elements[i].data.object);
+            break;
+        }
+    }
+
+    free(array->elements);
+    free(array);
+    array = NULL;
+}
+
+JSON_object* parseObject(TokensArray* tokens, int start) {
+    if (tokens->tokens[start]->type != TOKEN_LEFT_BRACE) {
+        printf("Invalid char at position %d.\n", start);
+        return NULL;
+    }
+
+    int endPosition = _findEnclosingTokenPosition(tokens, start);
+    if (endPosition < 0) {
+        return NULL;
+    }
+
+    SeparatorsData sData = _getSeparatorsData(tokens, start, endPosition);
+
+    JSON_object* object = (JSON_object*) malloc(sizeof(JSON_object));
+
+    object->length = sData.length;
+    object->properties = (ObjectProperty**) malloc(sData.length * sizeof(ObjectProperty**));
+
+    for (int i = start, j = 0, p = 0; j < sData.length; i = sData.positions[j++]) {
+        // comma is at i position
+        // key is at i + 1 position
+        // colon is at i + 2 position
+        // value is at i + 3 position
+
+        ObjectProperty* prop = (ObjectProperty*) malloc(sizeof(ObjectProperty));
+        prop->key = strdup(tokens->tokens[i + 1]->literal);
+
+        if (tokens->tokens[i + 3]->type == TOKEN_LEFT_BRACE) {
+            JSON_value value;
+            value.type = JSON_OBJECT;
+            value.data.object = parseObject(tokens, i + 3);
+            prop->value = value;
+        } else if (tokens->tokens[i + 3]->type == TOKEN_LEFT_BRACKET) {
+            JSON_value value;
+            value.type = JSON_ARRAY;
+            value.data.array = parseArray(tokens, i + 3);
+            prop->value = value;
+        } else {
+            prop->value = _parseValue(tokens->tokens[i + 3]);
+        }
+
+        object->properties[p++] = prop;
+    }
+
+    _separatorsDataCleanup(&sData);
+    return object;
+
+}
+
+void jsonObjectCleanup(JSON_object* object) {
+    for (int i = 0; i < object->length; i++) {
+        switch (object->properties[i]->value.type) {
+            case JSON_STRING:
+                free(object->properties[i]->value.data.string);
+            break;
+            case JSON_ARRAY:
+                jsonArrayCleanup(object->properties[i]->value.data.array);
+            break;
+            case JSON_OBJECT:
+                jsonObjectCleanup(object->properties[i]->value.data.object);
+            break;
+        }
+        free(object->properties[i]->key);
+    }
+
+    free(object->properties);
+    free(object);
+    object = NULL;
+}
+
+static SeparatorsData _getSeparatorsData(TokensArray* tArray, int startPosition, int endPosition) {
     SeparatorsData data;
     data.length = 0;
     data.positions = (int*) malloc(sizeof(int));
@@ -67,13 +187,14 @@ SeparatorsData getSeparatorsData(TokensArray* tArray, int startPosition, int end
     return data;
 }
 
-void separatorsDataCleanup(SeparatorsData* data) {
+static void _separatorsDataCleanup(SeparatorsData* data) {
     if (data->positions) {
         free(data->positions);
     }
+    data->positions = NULL;
 }
 
-int findEnclosingTokenPosition(TokensArray* tokens, int startPosition) {
+static int _findEnclosingTokenPosition(TokensArray* tokens, int startPosition) {
     TokenType enclosingToken;
     TokenType token = tokens->tokens[startPosition]->type;
     if (token == TOKEN_LEFT_BRACE) {
@@ -115,117 +236,7 @@ int findEnclosingTokenPosition(TokensArray* tokens, int startPosition) {
     return i;
 }
 
-// void parseValue(TokensArray* tokens, int index, int isArray) {
-//     int indexOfValue = isArray ? index : index + 2;
-//     switch (tokens->tokens[index]->type) {
-//         case TOKEN_NUMBER:
-//         case TOKEN_STRING:
-//         case TOKEN_JSON_TRUE:
-//         case TOKEN_JSON_FALSE:
-//         case TOKEN_NULL:
-//         case TOKEN_LEFT_BRACE:
-//         case TOKEN_LEFT_BRACKET:
-//         default: {
-//             printf("Unsupported value\n");
-//             return NULL;
-//         }
-//     }
-// }
-
-// void parseKeyValuePairs(int* start, int end, TokensArray* tokens, JSON_value* object) {
-//     for (; *start < end; *start++) {
-//         // key is at start position, colon is at start + 1 position, value is at start + 2 position
-//         // different for arrays
-//
-//         ObjectProperty* property = malloc(sizeof(ObjectProperty));
-//         property->key = &tokens->tokens[*start]->literal;
-//
-//         switch (tokens->tokens[*start]->type) {
-//             case TOKEN_NUMBER:
-//                 property->type = JSON_NUMBER;
-//                 property->data.number = &tokens->tokens[*start + 2]->literal;
-//                 break;
-//             case TOKEN_STRING:
-//                 property->type = JSON_STRING;
-//                 property->data.string = tokens->tokens[*start + 2]->literal;
-//                 break;
-//             case TOKEN_JSON_TRUE:
-//                 property->type = JSON_BOOLEAN;
-//                 proprety->data.boolean = 1;
-//                 break;
-//             case TOKEN_JSON_FALSE:
-//                 property->type = JSON_BOOLEAN;
-//                 proprety->data.boolean = 0;
-//                 break;
-//             case TOKEN_JSON_NULL:
-//                 property->type = JSON_NULL;
-//                 proprety->data.null = NULL;
-//                 break;
-//             case TOKEN_LEFT_BRACE: {
-//                 property->type = JSON_OBJECT;
-//                 proprety->data.object = parseJSON(tokens, *start);
-//                 break;
-//             }
-//             case TOKEN_LEFT_BRACKET: {
-//                 proprety->type = JSON_ARRAY;
-//                 proprety->data.array = (JSON_array*) malloc(sizeof(JSON_array));
-//                 int endPosition = findEnclosingTokenPosition(tokens, tokens->tokens[*start]->type, *start);
-//                 if (endPosition < 0) {
-//                     return NULL;
-//                 }
-//                 
-//                 SeparatorsData sData = getSeparatorsData(tokens, *start + 1, endPosition - 1);
-//
-//                 parseArray(tokens, *start + 1, endPosition - 1, array);
-//                 break;
-//                 // return parseArray(proprety->data.array, tokens, i, k);
-//             }
-//             default: {
-//                 printf("Unsupported value\n");
-//                 return NULL;
-//             }
-//         }
-//     }
-// }
-
-
-// void parseArray(TokensArray* tokens, int startIndex, int endIndex, JSON_array* array) {
-//
-// }
-
-// JSON_value* parseJSON(TokensArray* tokens, int startPosition) {
-//     int endPosition = findEnclosingTokenPosition(tokens, tokens->tokens[startPosition]->type, startPosition);
-//     if (endPosition < 0) {
-//         return NULL;
-//     }
-//     
-//     SeparatorsData sData = getSeparatorsData(tokens, startPosition + 1, endPosition - 1);
-//
-//     JSON_value* value = (JSON_value*) malloc(sizeof(JSON_value));
-//
-//     value->type = tokens->tokens[startPosition]->type == TOKEN_LEFT_BRACKET ? JSON_ARRAY : JSON_OBJECT;
-//     if (value->type == JSON_ARRAY) {
-//         value->data.array = (JSON_array*) malloc(sizeof(JSON_array));
-//     } else {
-//         value->data.object = (JSON_object*) malloc(sizeof(JSON_object));
-//     }
-//
-//     for (int j = 0, i = startPosition + 1; j <= sData.length; j++) {
-//         int endsAt = j < sData.length ? sData.positions[j] : endPosition - 1;
-//         parseKeyValuePairs(&i, endsAt, tokens, value->type == TOKEN_ARRAY ? value->data.array : value->data.object);
-//         i = sData.positions[j] + 1;
-//     }
-//
-//     for (int i = startPosition, j = 0; i < endPosition; i++, ) {
-//
-//     }
-//
-//     separatorsDataCleanup(sData);
-//
-//     return object;
-// }
-
-JSON_value parseValue(Token* token) {
+static JSON_value _parseValue(Token* token) {
     JSON_value value;
 
     switch (token->type) {
@@ -256,145 +267,16 @@ JSON_value parseValue(Token* token) {
     return value;
 }
 
-JSON_array* parseArray(TokensArray* tokens, int start) {
-    if (tokens->tokens[start]->type != TOKEN_LEFT_BRACKET) {
-        printf("Invalid char at position: %d\n", start);
-        return NULL;
-    }
-
-    int endPosition = findEnclosingTokenPosition(tokens, start);
-    if (endPosition < 0) {
-        return NULL;
-    }
-
-    SeparatorsData sData = getSeparatorsData(tokens, start, endPosition);
-
-    JSON_array* array = (JSON_array*) malloc(sizeof(JSON_array*));
-    array->length = sData.length;
-
-    JSON_value elements[sData.length];
-    array->elements = elements; 
-
-    for (int i = start, j = 0; j < sData.length; j++, i = sData.positions[j]) {
-        if (tokens->tokens[i + 1]->type == TOKEN_LEFT_BRACKET) {
-            JSON_value value;
-            value.type = JSON_ARRAY;
-            value.data.array = parseArray(tokens, i + 1);
-            array->elements[j] = value;
-        } else if (tokens->tokens[i + 2]->type == TOKEN_LEFT_BRACE) {
-            JSON_value value;
-            value.type = JSON_OBJECT;
-            value.data.object = parseObject(tokens, i + 1);
-            array->elements[j] = value;
-        } else {
-            JSON_value v = parseValue(tokens->tokens[i + 1]);
-            array->elements[j] = parseValue(tokens->tokens[i + 1]);
-        }
-    }
-
-    separatorsDataCleanup(&sData);
-    return array;
-}
-
-JSON_object* parseObject(TokensArray* tokens, int start) {
-    if (tokens->tokens[start]->type != TOKEN_LEFT_BRACE) {
-        printf("Invalid char at position %d.\n", start);
-        return NULL;
-    }
-
-    int endPosition = findEnclosingTokenPosition(tokens, start);
-    if (endPosition < 0) {
-        return NULL;
-    }
-
-    SeparatorsData sData = getSeparatorsData(tokens, start, endPosition);
-
-    JSON_object* object = (JSON_object*) malloc(sizeof(JSON_object));
-
-    object->length = sData.length;
-    object->properties = (ObjectProperty**) malloc(sData.length * sizeof(ObjectProperty**));
-
-    for (int i = start, j = 0, p = 0; j < sData.length; j++, i = sData.positions[j]) {
-        // commas is at i position
-        // key is at i + 1 position
-        // colon is at i + 2 position
-        // value is at i + 3 position
-
-        ObjectProperty* prop = (ObjectProperty*) malloc(sizeof(ObjectProperty));
-        prop->key = strdup(tokens->tokens[i + 1]->literal);
-
-        if (tokens->tokens[i + 3]->type == TOKEN_LEFT_BRACE) {
-            JSON_value value;
-            value.type = JSON_OBJECT;
-            value.data.object = parseObject(tokens, i + 3);
-            prop->value = value;
-        } else if (tokens->tokens[i + 3]->type == TOKEN_LEFT_BRACKET) {
-            JSON_value value;
-            value.type = JSON_ARRAY;
-            value.data.array = parseArray(tokens, i + 3);
-            prop->value = value;
-            // printf("prop->value->type\n");
-            // printf("after another parseArray");
-        } else {
-            // printf("key: %s | value: %d\n", tokens->tokens[i + 1]->literal, tokens->tokens[i + 3]->type);
-            prop->value = parseValue(tokens->tokens[i + 3]);
-        }
-        object->properties[p++] = prop;
-
-        // int endsAt = j < sData.length ? sData.positions[j] : endPosition - 1;
-        // parseKeyValuePairs(i, )
-    }
-
-    return object;
-
-}
-
-// parse json(TokensArray* tokens, unsigned int startPosition) {
-//      // find enclosing token for token at start position
-//      int endPosition = findEnclosingTokenPosition();
-//
-//      create value to attach
-//
-//      // get separators for range(start position|end position);
-//      // for each group separated by the separator run loop
-//      // loop should also run from last separator position to the end position
-//
-//
-// }
-
-void jsonCleanup(JSON_object** parsedJson) {
-    if (parsedJson) {
-        free(parsedJson);
-    }
-}
-
 int main() {
     const char *testString = "{\"protocol\":\"HTTP\",\"version\":1.1,\"methods\":[\"GET\",\"PUT\",\"POST\",\"PATCH\",\"DELETE\"],\"headers\":{\"content-type\":\"application/json\",\"content-length\":125,\"host\":\"localhost:8080\"},\"nullValue\": null,\"trueValue\":true,\"falseValue\":false}";
 
     TokensArray tokens = parseTokens(testString);
-    // for (int i = 0; i < tokens.length; i++) {
-    //     printf("token[%d]: %d \n", i, tokens.tokens[i]->type);
-    // }
 
     JSON_object* object = parseObject(&tokens, 0);
 
-    // printf("object->length: %d\n", object->length);
-    for (int i = 0; i < object->length; i++) {
-        printf("key: %s | value type: %d\n", object->properties[i]->key, object->properties[i]->value.type);
-    }
-
-    printf("values of array: \n");
-    printf("key: %s, value type: %d\n", object->properties[1]->key, object->properties[1]->value);
-    for (int i = 0; i < object->properties[1]->value.data.array->length; i++) {
-        printf("%d ", object->properties[1]->value.data.array->length);
-        printf("%d ", object->properties[1]->value.data.array->elements[i].type);
-    }
-    // for (int i = 0; i < tokens.length; i++) {
-    //     printf("token[%d] type = %d | value = %s\n", i, tokens.tokens[i]->type, tokens.tokens[i]->literal);
-    // }
-
     parsedTokensCleanup(tokens);
-    free(object);
+
+    jsonObjectCleanup(object);
 
     return 0;
 }
