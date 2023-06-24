@@ -44,22 +44,10 @@ typedef struct JSON_array {
     JSON_value* elements;
 } JSON_array;
 
-typedef struct {
-    size_t length;
-    size_t cap;
-    char** value;
-} ParserErrors;
+JSON_object* parseObject(TokensArray* tokens, int start);
+JSON_array* parseArray(TokensArray* tokens, int start);
 
-typedef struct {
-//    Lexer* lexer;
-//    ParserErrors* errors;
-    Token* current;
-    Token* peek;
-} Parser;
-
-Parser* parserCreate();
-JSON_object* parseJSON(TokensArray* tokens);
-
-char** parserErrors(Parser* parser);
+void jsonObjectCleanup(JSON_object* object);
+void jsonArrayCleanup(JSON_array* array);
 
 #endif // _PARSER_H_

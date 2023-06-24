@@ -254,30 +254,3 @@ static uint8_t _isNumber(char ch) {
 static uint8_t _isLetter(char ch) {
     return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z' || ch == '_';
 }
-
-
-
-// void process_json_object(const char* object) {
-    
-// }
-
-
-// int main() {
-//     const char *testString = "{\"protocol\":\"HTTP\",\"version\":1.1,\"methods\":[\"GET\",\"PUT\",\"POST\",\"PATCH\",\"DELETE\"],\"headers\":{\"content-type\":\"application/json\",\"content-length\":125,\"host\":\"localhost:8080\"},\"nullValue\": null,\"trueValue\":true,\"falseValue\":false}";
-//     int length = strlen(testString);
-
-//     Lexer* lexer = lexerCreate(testString);
-//     Token* token = NULL;
-
-//     int i = 0;
-//     while ((token = lexerNext(lexer)) && token->type != TOKEN_EOF) {
-//         printf("Token[%d].type: %d.\nToken[%d].literal: %s\n\n", i, token->type, i, token->literal);
-//         // printf("position: %d\n", lexer->position);
-//         tokenCleanup(&token);
-//         i++;
-//     }
-//     // printf("from 207 position: %s\n", &testString[202]);
-
-//     lexerCleanup(&lexer);
-//     return 0;
-// }
